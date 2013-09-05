@@ -1,0 +1,8 @@
+#! /bin/bash
+echo "Patching Uboot $1 for node $2 variant $3."
+cd $2_$3
+for patch in `ls ../patches/patch*.$2.$3*`
+do
+        echo "   $patch"
+        cat $patch | (cd u-boot-$1 && patch -p1)
+done

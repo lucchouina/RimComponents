@@ -1,0 +1,167 @@
+#!/usr/bin/env python
+#
+
+""" settings/handlers/imgd.py
+
+    Configuration support for image server.
+    We read and write tothe configuration file and the imgd program will 
+    use imon interface to detect changes and reajust state and host table.
+"""
+import time
+import os
+from settings.command import *
+from settings.utils import *
+import simplejson as json
+
+myId="track"
+CONFILE="/etc/track.conf"
+defaultConfig="""
+{
+    "Enabled" : false,
+    "Programs" : [
+    ]
+}
+"""
+
+def saveCfg(cfg):
+    # we create a flat file for the manager program (legacy)
+    """
+    {
+        "Enabled": false,
+        "Programs": [
+            {
+                "Name": "activity",
+                "poison": true,
+                "track": true,
+                "validate": true
+            }
+        ]
+    }
+    
+    to
+    
+    activity enable=on,poison=on,track=on,validate=on
+
+    """
+    flatFile="/etc/trxdbg.conf"
+    open(CONFILE, "w").write("%s" % json.dumps(cfg, sort_keys=True, indent=4))
+    if cfg['Enabled']:
+        f=open(flatFile, "w")
+        for program in cfg['Programs']:
+            if program['poison']: poison='on'
+            else: poison='off'
+            if program['track']: track='on'
+            else: track='off'
+            if program['validate']: validate='on'
+            else: validate='off'
+            f.write("%s enable=on,poison=%s,track=%s,validate=%s\n" % (program['Name'], poison, track, validate))
+        f.close()
+    else:
+        os.system("rm -f %s" % flatFile)
+    
+def get():
+    # read config
+    if os.path.exists(CONFILE):
+        cfg=json.loads(open(CONFILE,"r").read())
+    else:
+        cfg=json.loads(defaultConfig)
+        saveCfg(cfg)
+    return cfg
+    
+def newProgram (pos):
+    program={}
+    program["Name"]="name%d" % pos
+    program["poison" ]=True
+    program["track"]=True
+    program["validate" ]=True
+    return program
+
+# support adding or removing hosts (used by web interface)
+def op(root, op, sub):
+    if sub[0] != 'Programs':
+        print "Invalid key '%s' - expected 'programs'" % sub[0]
+    else:
+        if op == '+':
+            root[myId]['Programs'].insert(0, newProgram(len(root[myId]['Programs'])+1))
+        elif op == '-':
+            del(root[myId]['Programs'][int(sub[-1])])
+    return root
+    
+cfg=get()
+
+# set            
+def set(old, new):
+    saveCfg(new[myId])
+    return "restart trx"
+        
+def schema():
+    return """
+    "%s": {
+        "type":"map",
+        "order":"3",
+        "initmode":true,
+        "title":"Resource tracker",
+        "description":"Track resources in real time",
+        "mapping":
+        {
+            "Enabled": 
+            {
+                "order":"1",
+                "appmode":false,
+                "type":"bool",
+                "required":true,
+                "title":"Enable tracking"
+            }, 
+            "Programs":
+            {
+                "type":"seq",
+                "order":"1",
+                "appmode":true,
+                "title":"Program list",
+                "description":"List of all programs currently tracked",
+                "sequence": 
+                [
+                    {
+                        "type":"map",
+                        "appmode":true,
+                        "title": "Program configuation",
+                        "description":"Information about each program",
+                        "mapping": {
+                            "Name": {
+                                "type":"str",
+                                "order":"1",
+                                "appmode":true,
+                                "title": "program name",
+                                "description":"Name of the program to track (no path)"
+                            },
+                            "poison": {
+                                "type":"bool",
+                                "order":"2",
+                                "appmode":true,
+                                "title": "Poison freed memory",
+                                "description":"Pad memory with addresses of free callstack"
+                            },
+                            "track": {
+                                "type":"bool",
+                                "order":"3",
+                                "appmode":true,
+                                "title": "Record allocation callstack",
+                                "description":"Allocate additional space for recoridng allocation callstack "
+                            },
+                            "validate": {
+                                "type":"bool",
+                                "order":"4",
+                                "appmode":true,
+                                "title": "Validate on free",
+                                "description":"Validate link list on free (requires 'track')"
+                            }
+                        }
+                    }
+                ]
+            }
+         }
+     }
+""" % myId
+
+def cfgKey(): 
+    return myId           

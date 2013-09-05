@@ -1,0 +1,21 @@
+#!/usr/bin/env python
+
+"""
+Perform a backup - called from commands line or cron
+"""
+import sys
+import backups
+
+pw=""
+if (len(sys.argv) > 1):
+    pw=sys.argv[1]
+backup=backups.Backup();
+
+msg=backup.validate(pw)
+
+if len(msg):
+    print msg
+    sys.exit(1)
+else:
+    print "Success"        
+    sys.exit(0)

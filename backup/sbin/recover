@@ -1,0 +1,48 @@
+#!/usr/bin/env python
+
+"""
+Perform a recovery
+"""
+import backups
+import sys
+import subprocess
+import os
+import time
+
+backup=backups.Backup();
+# set the gate 
+state=backup.setRecover(True)
+try:
+    # fire up the recovery itself in the background
+    child = subprocess.Popen("run-recover", stdout=subprocess.PIPE, shell=True)
+    while True:
+        backup.readCfg()
+        if backup.getCfg()[backups.STATUS_ATTR] == "preparing":
+            break;
+    stage=""
+    done=""
+    while True:
+        backup.readCfg()
+        cfg=backup.getCfg()
+        if cfg[backups.STATUS_ATTR] != stage:
+            if len(stage):
+                print "\r%s - done." % (stage)
+            stage=cfg[backups.STATUS_ATTR]
+        else:
+            print "\r",
+        if stage == "recovering":
+            print "%s - %s ..." % (stage, cfg[backups.PROGRESS_ATTR]), 
+        else:
+            print "%s ..." % stage,
+        sys.stdout.flush()
+        if stage == "success": break
+        time.sleep(1)
+        
+except:
+    # any reasons for the process to terminate incl. exiting with a non zero value
+    # will come here
+    backup.readCfg()
+    cfg=backup.getCfg()
+    print "\n%s" % cfg[backups.ERROR_ATTR]
+    
+backup.setRecover(state)

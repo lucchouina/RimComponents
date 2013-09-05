@@ -1,0 +1,51 @@
+#! /bin/bash
+cleanfiles='
+arch/arm/boot/Image 
+arch/arm/boot/compressed/lib1funcs.S 
+arch/arm/boot/compressed/piggy.gzip 
+arch/arm/boot/compressed/vmlinux 
+arch/arm/boot/compressed/vmlinux.lds 
+arch/arm/boot/zImage 
+arch/arm/kernel/vmlinux.lds
+.config.default
+scripts/genksyms/keywords.hash.c
+scripts/genksyms/lex.lex.c
+scripts/genksyms/parse.tab.c
+scripts/genksyms/parse.tab.h
+'
+kver="$1"
+node="$2"
+variant="$3"
+if [ ! "$kver" -o ! "$node" -o ! "$variant" ]
+then
+    echo "Usage: make NODE=node VARIANT=variant" 
+    exit 1
+fi
+cd ${node}_$variant
+#
+# make distclean does NOT remove all files
+# if you end up with a very large patch file, you should :
+#
+# strings -a <patchfile> | grep +++
+#
+# And add the list of files that are to be cleaned to the above list.
+#
+(cd linux-$kver && rm -f $cleanfiles)
+mv linux-$kver linux-$kver.new
+echo -n "Untarring original..."
+tar xjf ../source/linux-$kver.tar.bz2
+echo "done."
+echo -n "Patching original to level..."
+(cd .. && ./patchkern $kver $node $variant)
+echo "done."
+
+echo -n "Creating the patch..."
+diff -Naur linux-$kver linux-$kver.new > patch
+echo "done."
+
+echo -n "Removing..."
+\rm -rf linux-$kver
+echo "done."
+
+mv linux-$kver.new linux-$kver
+echo "The new patch in in ${node}_$variant/patch"

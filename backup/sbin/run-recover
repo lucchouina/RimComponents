@@ -1,0 +1,57 @@
+#!/usr/bin/env python
+
+"""
+Perform a recovery
+"""
+import backups
+import sys
+import subprocess
+import os
+import time
+import rim
+
+backup=backups.Backup();
+
+if (len(sys.argv) > 1): pw=sys.argv[1]
+else: pw=""
+
+exitCode=1
+
+# if this is cron calling us, exit emmediately if continuous backups are turned off.
+while True:
+    #
+    # with each pass read the current settings
+    # only the user can stop us from trying to perform a recovery
+    # by going to the UI and turning off the "recover from latest backup" button
+    #
+    backup.readCfg()
+    if not backup.doRecover(): 
+        break
+    
+    # ok - try it
+    if not backup.lockit(30):
+        backup.log("Lock is busy with pid %d" % backup.pid)
+    else:
+        msg=backup.validate(pw=pw, rec=True)
+        if len(msg):
+            backup.logErr(msg)
+            break
+        else:
+            backup.logErr("Preparing recovery", "preparing")
+            time.sleep(2)
+            cmd="/sbin/runhook prerestore"
+            ok, code = rim.runCmd(backup.log, cmd)
+            if not ok:
+                backup.logErr("Pre-recovgery failed with error %d" % code, "error")
+            else:
+                if backup.recover():
+                    cmd="/sbin/runhook postrestore"
+                    ok, code = rim.runCmd(backup.log, cmd)
+                    if not ok:
+                        backup.logErr("Post-recovgery failed with error %d" % code, "error")
+                    else:
+                        exitCode=0
+                        # backups.recover will have reset the recovery flag
+                        # and backup.doRecover() will return false.
+        backup.unlockit()
+sys.exit(exitCode)

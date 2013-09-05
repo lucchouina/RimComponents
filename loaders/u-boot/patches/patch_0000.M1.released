@@ -1,0 +1,277 @@
+diff -Naur u-boot-2011.12/common/cmd_rim.c u-boot-2011.12.new/common/cmd_rim.c
+--- u-boot-2011.12/common/cmd_rim.c	1969-12-31 19:00:00.000000000 -0500
++++ u-boot-2011.12.new/common/cmd_rim.c	2012-03-21 09:43:13.935264805 -0400
+@@ -0,0 +1,273 @@
++/*
++ * (C) Copyright 2000-2003
++ * Wolfgang Denk, DENX Software Engineering, wd@denx.de.
++ *
++ * See file CREDITS for list of people who contributed to this
++ * project.
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License as
++ * published by the Free Software Foundation; either version 2 of
++ * the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
++ * MA 02111-1307 USA
++ */
++
++/*
++ * Misc boot support
++ */
++#include <command.h>
++#include <image.h>
++#include <linux/ctype.h>
++#include <asm/byteorder.h>
++#include <common.h>
++#include <part.h>
++#include <ext2fs.h>
++#include <malloc.h>
++
++#define MAX_BTAB_SIZE (1000000)
++int do_ext2load (cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[]);
++int do_mmcops(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[]);
++static char *buf=NULL;
++
++/*
++    Read a file from ext2 partition to a buffer.
++    This function returns the length of the file (>0) on success and 0 of failure.
++*/
++static int rim_get_file(char *fname, char *buf, int maxlen, cmd_tbl_t *cmdtp, int flag, char * const argv[])
++{
++    int len=0;
++    char addr[10];
++    char count[10];
++    char *newargv[6];
++    // always rescan the mmcs
++    {
++        char *tmpargs[] = { "mmc", "rescan", 0 };
++        do_mmcops(cmdtp, flag, 2, tmpargs);
++    }
++    sprintf(addr, "0x%p", buf);
++    sprintf(count, "%d", maxlen);
++    newargv[1]=argv[1];
++    newargv[2]=argv[2];
++    newargv[3]=addr;
++    newargv[4]=fname;
++    newargv[5]=count;
++    if(do_ext2load (cmdtp, flag, 6, newargv)) len=0;
++    else {
++        len=simple_strtoul(getenv("filesize"), NULL, 16);
++    }
++    return len;
++}
++
++/*
++    Read the boot table.
++    This file is managed at the linux user level via initial installation (rimakesd) or during 
++    upgrades (rimboot).
++*/
++static char *rim_get_boottab(cmd_tbl_t *cmdtp, int flag, char * const argv[])
++{
++    if(!buf) {
++        buf=calloc(1, MAX_BTAB_SIZE);
++        if(!buf) {
++            printf("Could not allocate %d bytes for boot table\n", MAX_BTAB_SIZE);
++        }
++        else {
++            if(!rim_get_file("/boottab", buf, MAX_BTAB_SIZE-1, cmdtp, flag, argv)) {
++                free(buf);
++                buf=0;
++            }
++        }
++    }
++    return buf;
++}
++
++int do_rimls (cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
++{
++	char *fdata;
++    if (argc < 3)
++		return cmd_usage(cmdtp);
++
++    fdata=rim_get_boottab(cmdtp, flag, argv);
++    if(fdata) {
++        /*
++            List it
++        */
++        char *buf=malloc(1024);;
++        char *line=fdata;
++        int i=1;
++        while(*line) {
++            if(*line=='\n') *line='\0';
++            line++;
++        }
++        line=fdata;
++        /* file data buffer is null terminated */
++        while(*line) {
++            char *fstr;
++            int inc=strlen(line)+1;
++            strcpy(buf, line);
++            fstr = strtok (buf, " \t");
++            if(fstr) {
++                char *vstr;
++                flag=simple_strtoul(fstr, NULL, 10);
++                vstr=strtok(NULL, " \t");
++                if(vstr) {
++                    printf("%c [%d] version %s\n", flag?(flag==1?'*':(flag==2?'!':'?')):' ', i, vstr);
++                }
++                vstr=strtok(NULL, " \t");
++                while(vstr) {
++                    printf("        %s\n",  vstr);
++                    vstr=strtok(NULL, " \t");
++                }
++                i++;
++            }
++            line+=inc;
++        }
++        return 0;
++    }
++	return 1;
++}
++
++/*
++
++    Need to implement a version specific of the following b-boot command sequence:
++    
++    mmc rescan
++    setenv bootargs console=ttyS0,115200n8 ramdisk_size=$SIZE root=/dev/ram0 init=/init rw initrd=0xC1180000,$SIZEM
++    ext2load mmc 0:1 0xC0700000 $VERSION/kernel
++    ext2load mmc 0:1 0xC1180000 $VERSION/initrd.fs
++    bootm 0xC0700000
++    
++    Where: 
++        $VERSION is the version that is selected by the boottab flags or a command line specified version index.
++        $SIZE is the size of that version initrd file.
++*/
++#define KLOADADDR 0xC0700000
++#define ILOADADDR 0xc0A00000
++#define CRASHADDR 0xC2000000
++#define CRASHMEGS 8
++#define ARGFMT "%s console=ttyS1,115200n8 rimDiskNames=mmcblk0 pprefix=p ramdisk_size=%d root=/dev/ram0 initrd=0x%08x,%dM crashkernel=%dM@0x%08x %s"
++static void
++rimBootVersion(cmd_tbl_t *cmdtp, int argc,  char * const argv[], char *version, int flag, char *args)
++{
++    int do_bootm(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[]);
++    char *envargs=getenv("bootargs");
++    unsigned int initsize=0;
++    char fname[100];
++    static char bootargs[1024];
++    
++    snprintf(fname, sizeof fname, "%s/kernel", version);
++    if((initsize=rim_get_file(fname, (void*)KLOADADDR, ILOADADDR-KLOADADDR, cmdtp, flag, argv))) {
++        printf("Kernel - read %d bytes @ 0x%08x.\n", initsize, KLOADADDR);
++        snprintf(fname, sizeof fname, "%s/initrd.fs", version);
++        if((initsize=rim_get_file(fname, (void*)ILOADADDR, 16*1024*1024, cmdtp, flag, argv))) {
++            printf("Initrd.fs read %d bytes @ 0x%08x.\n", initsize, ILOADADDR);
++            initsize=((initsize+0x0fffff)&~0x0fffff);
++            
++            snprintf(bootargs, sizeof bootargs, ARGFMT, envargs?envargs:"", initsize/1024, ILOADADDR, initsize>>20, CRASHMEGS, CRASHADDR, args);
++            {
++                int i;
++                for(i=3;i<argc+1;i++) {
++                    if(strlen(bootargs)+strlen(argv[i])+1 >= sizeof bootargs) break;
++                    strcat(bootargs, " ");
++                    strcat(bootargs, argv[i]);
++                }
++            }
++            setenv("bootargs", bootargs);
++            printf("Bootargs=[%s]\n", bootargs);
++            snprintf(bootargs, sizeof bootargs, "0x%08x", KLOADADDR);
++            {
++                char *argv[3];
++                argv[0]="bootm";
++                argv[1]=bootargs;
++                argv[2]=NULL;
++                do_bootm(cmdtp, 1, 2, argv);
++            }
++        }
++    }
++}
++
++int do_rimboot (cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
++{
++	char *fdata;
++    int fwant=1, index=0;
++    if (argc < 3)
++		return cmd_usage(cmdtp);
++        
++    if(argc == 4) {
++        index=simple_strtoul(argv[3], NULL, 10);
++    }
++    else index=0; /* 0 is 'use version flaged as 1 in boottab' */
++
++    fdata=rim_get_boottab(cmdtp, flag, argv);
++    if(fdata) {
++        /*
++            List it
++        */
++        char *buf=malloc(1024);;
++        char *line=fdata;
++        int i=1;
++        while(*line) {
++            if(*line=='\n') *line='\0';
++            line++;
++        }
++        line=fdata;
++        /* file data buffer is null terminated */
++        while(*line) {
++            char *fstr;
++            strcpy(buf, line);
++            fstr = strtok (buf, " \t");
++            if(fstr) {
++                char *vstr;
++                flag=simple_strtoul(fstr, NULL, 10);
++                if((flag==fwant && index == 0) || index == i) {
++                    vstr=strtok(NULL, " \t");
++                    if(vstr) {
++                        printf("Booting version %s\n", vstr);
++                        rimBootVersion(cmdtp, argc, argv, vstr, flag, line+strlen(fstr) + strlen(vstr) + 2);
++                        /* failed that boot - try fallback ? */
++                        if(fwant == 2) break;
++                        fwant=2;
++                        line=fdata;
++                        continue;
++                    }
++                }
++                i++;
++            }
++            line+=strlen(line)+1;
++        }
++    }
++    printf("Failed to boot Primary and/or Fallback versions!\n");
++	return 1;
++}
++
++/* -------------------------------------------------------------------- */
++
++U_BOOT_CMD(
++	rimls, 3, 0,	do_rimls,
++	"List all available bootable RIM versions on supplied device:partition",
++	"<interface> <dev[:part]>\n"
++	"    - list RIM versions from 'dev' on 'interface'"
++);
++U_BOOT_CMD(
++	rimboot, CONFIG_SYS_MAXARGS, 0,	do_rimboot,
++	"Perform a RIM boot.",
++	"<interface> <dev[:part]> [version index]\n"
++    "A RIM boot will boot the kernel and initrd of the default\n"
++	"version. Possibly falling back to the fallback version\n"
++	"on a failur eof the defaut.\n"
++	"\n"
++    "An optional version index, as shown with command 'rimls', can be\n"
++    "specified"
++	"\n"
++	"Bootargs will be appended to the builtin RIM kernel parametrs.\n"
++	"For example, an emergency boot would involve 'setenv bootargs \n"
++    "ermegency; rimboot'.\n"
++);

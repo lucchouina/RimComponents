@@ -1,0 +1,12 @@
+bindir=/home/lchouinard/scs/rim_1.0/components/lxc/lxc-0.8.0/i686/bin
+libdir=/home/lchouinard/scs/rim_1.0/components/lxc/lxc-0.8.0/i686/lib
+localstatedir=/home/lchouinard/scs/rim_1.0/components/lxc/lxc-0.8.0/i686/var
+includedir=/home/lchouinard/scs/rim_1.0/components/lxc/lxc-0.8.0/i686/include
+rootfsmountdir=/home/lchouinard/scs/rim_1.0/components/lxc/lxc-0.8.0/i686/lib/lxc/rootfs
+
+Name: lxc
+Description: linux container tools
+Version: 0.8.0
+URL: http://lxc.sourceforge.net
+Libs: -L${libdir} -llxc -lutil
+Cflags: -I${includedir}

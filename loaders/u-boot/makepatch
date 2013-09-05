@@ -1,0 +1,39 @@
+#! /bin/bash -vx
+cleanfiles='
+'
+uver="$1"
+node="$2"
+variant="$3"
+if [ ! "$uver" -o ! "$node" -o ! "$variant" ]
+then
+    echo "Usage: make NODE=node VARIANT=variant" 
+    exit 1
+fi
+cd ${node}_$variant
+#
+# make distclean does NOT remove all files
+# if you end up with a very large patch file, you should :
+#
+# strings -a <patchfile> | grep +++
+#
+# And add the list of files that are to be cleaned to the above list.
+#
+(cd u-boot-$uver && rm -f $cleanfiles)
+mv u-boot-$uver u-boot-$uver.new
+echo -n "Untarring original..."
+tar xzf ../source/u-boot-$uver.tgz
+echo "done."
+echo -n "Patching original to level..."
+(cd .. && ./patchuboot $uver $node $variant)
+echo "done."
+
+echo -n "Creating the patch..."
+diff -Naur u-boot-$uver u-boot-$uver.new > patch
+echo "done."
+
+echo -n "Removing..."
+\rm -rf u-boot-$uver
+echo "done."
+
+mv u-boot-$uver.new u-boot-$uver
+echo "The new patch in in ${node}_$variant/patch"

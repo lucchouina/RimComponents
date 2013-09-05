@@ -1,0 +1,168 @@
+#!/usr/bin/env python
+#
+
+""" settings/handlers/imgd.py
+
+    Configuration support for image server.
+    We read and write tothe configuration file and the imgd program will 
+    use imon interface to detect changes and reajust state and host table.
+"""
+import time
+import os
+from settings.command import *
+from settings.utils import *
+from img import isos
+import simplejson as json
+
+myId="imgd"
+CONFILE="/etc/imgd.conf"
+isoDir="/pivot/data/isos"
+defaultConfig="""
+{
+    "hosts" : [
+        {
+            "Name": "Global",
+            "Mac" : "00:0C:29:58:F9:FF",
+            "Serve" : false,
+            "Ip" : "192.168.1.54",
+            "Iso" : "Global"
+        },
+        {
+            "Name": "Netbox",
+            "Mac" : "00:0C:29:3D:54:41",
+            "Serve" : false,
+            "Ip" : "192.168.1.51",
+            "Iso" : "ComboContainer"
+        }
+    ]
+}
+"""
+
+def saveCfg(cfg):
+    open(CONFILE, "w").write("%s" % json.dumps(cfg, sort_keys=True, indent=4))
+    
+def get():
+    # read config
+    if os.path.exists(CONFILE):
+        cfg=json.loads(open(CONFILE,"r").read())
+    else:
+        cfg=json.loads(defaultConfig)
+        saveCfg(cfg)
+    return cfg
+    
+def newHost():
+    host={}
+    host["Name"]=""
+    host["Mac" ]=""
+    host["Serve"]=False
+    host["Ip" ]=""
+    host["Iso" ]=""
+    return host
+
+# suport adding or removing hosts (used by web interface)
+def op(root, op, sub):
+    if sub[0] != 'hosts':
+        print "Invalid key '%s' - expected 'hosts'" % sub[0]
+    else:
+        if op == '+':
+            root[myId]['hosts'].insert(0, newHost())
+        elif op == '-':
+            del(root[myId]['hosts'][int(sub[-1])])
+    return root
+    
+cfg=get()
+
+def setServe(cfg, mac, onoff):
+    for host in cfg['hosts']:
+        if host['Mac']==mac:
+            host['Serve']=onoff
+    saveCfg(cfg)
+
+# set            
+def set(old, new):
+    saveCfg(new[myId])
+    return ""
+    
+def schemaStr():
+    
+    imgList=isos.isos().getImgList()
+    return """
+        "hosts":
+        {
+            "type":"seq",
+            "order":"1",
+            "appmode":true,
+            "title":"Hosts list",
+            "description":"List ofall host currently managed",
+            "sequence": 
+            [
+                {
+                    "type":"map",
+                    "appmode":true,
+                    "title": "Host configuration",
+                    "description":"Information about each host",
+                    "mapping": {
+                        "Name": {
+                            "type":"str",
+                            "order":"1",
+                            "appmode":true,
+                            "title": "Hostname name",
+                            "description":"Name of the host to be delivered using dhcp"
+                        },
+                        "Mac": {
+                            "type":"str",
+                            "subtype": "mac",
+                            "order":"2",
+                            "appmode":true,
+                            "title": "MAC address",
+                            "description":"MAc address the request will be coming in"
+                        },
+                        "Serve": {
+                            "type":"bool",
+                            "order":"3",
+                            "appmode":true,
+                            "title": "Respond to dhcp?",
+                            "description":"A single shot boolean to force answer to next dhcp from that host"
+                        },
+                        "Ip": {
+                            "type":"str",
+                            "subtype": "ip",
+                            "order":"4",
+                            "appmode":true,
+                            "title": "Ip address assigned to this host",
+                            "description":"A single shot boolean to force answer to next dhcp from that host"
+                        },
+                        "Iso": {
+                            "type":"str",
+                            "order":"5",
+                            "appmode":true,
+                            "title": "Image file",
+                            "description":"Image to use for TFTP fetches of NFS mount",
+                            "enum":
+                            [
+                                %s
+                            ]
+                        }
+                    }
+                }
+            ]
+        }
+    """ % imgList
+    
+def schema():
+    return """
+        "%s": {
+            "type":"map",
+            "order":"3",
+            "appmode":true,
+            "title":"Image server",
+            "description":"Image server for node bringup",
+            "mapping":
+            {
+%s
+            }
+        }
+""" % (myId, schemaStr())
+
+def cfgKey(): 
+    return myId           

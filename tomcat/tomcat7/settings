@@ -1,0 +1,150 @@
+#!/usr/bin/env python
+#
+
+""" webinfo.py
+
+JSON for reading/updating Web Server Settings
+
+Valid attributes are:
+
+UseSSL: True/False (turn on SSL, currently unsupported)
+RequireSSL: True/False (turn on SSL, and require it, currently unsupported)
+SSLPort: <#> (currently unsupported, defaults to 443)
+Port: <#> (the port the web server listens on
+
+The result (right now) looks something like:
+
+{"UseSSL": false, "RequireSSL": false, "SSLPort": 443, "Port": 9011}
+
+"""
+
+import xml.dom.minidom
+import json
+import os
+import rim
+
+from settings.command import *
+from settings.utils import *
+
+DISCOVERY_FILE = "/etc/avahi/services/%s.service"
+PORT_ATTR = "Port"
+REQUIRE_SSL_ATTR = "RequireSSL"
+SSLPORT_ATTR = "SSLPort"
+USESSL_ATTR = "UseSSL"
+
+ALL_ATTRS = [ PORT_ATTR, REQUIRE_SSL_ATTR, SSLPORT_ATTR, USESSL_ATTR ]
+
+TOMCAT_SERVER_FILE="/var/lib/tomcat7/conf/server.xml"
+myId="HttpInfo"
+
+def get():
+    """ retrieve web server settings """    
+    tomcatServerDoc = None
+    
+    tomcatServerDoc = xml.dom.minidom.parse(TOMCAT_SERVER_FILE)
+        
+    connectorNode = tomcatServerDoc.getElementsByTagName("Connector")[0]
+    
+    ws = {}
+    
+    ws[PORT_ATTR] = int(connectorNode.getAttribute("port"))
+    ws[REQUIRE_SSL_ATTR] = False
+    ws[SSLPORT_ATTR] = 443
+    ws[USESSL_ATTR] = False
+    
+    return ws
+
+def set(old, new):
+    """ set web server settings conditionally """
+
+    new_values=new[myId]
+    hostname=new['DNS']['Name']
+    port = new_values[PORT_ATTR]
+    requireSSL = new_values[REQUIRE_SSL_ATTR]
+    sslPort = new_values[SSLPORT_ATTR]
+    useSSL = new_values[USESSL_ATTR]
+    
+    #
+    # setup a service file for bonjour to use if discovery is enabled
+    #
+    f = open(DISCOVERY_FILE % hostname, "w")
+    f.write('%s _http._tcp %d\n' % (hostname, port))
+    f.close()
+    #
+    # SSL not yet implemented
+    #
+    if useSSL == True or requireSSL == True:
+        raise Exception("SSL not implemented")
+    
+    tomcatServerDoc = None
+    
+    tomcatServerDoc = xml.dom.minidom.parse(TOMCAT_SERVER_FILE)
+        
+    connectorNode = tomcatServerDoc.getElementsByTagName("Connector")[0]
+    
+    connectorNode.setAttribute("port", str(port))
+    
+    f = open(TOMCAT_SERVER_FILE, "w")
+        
+    tomcatServerDoc.writexml(f)
+    
+    f.close()
+
+    run_command("echo 'tcp %d ACCEPT' > /etc/firewall.d/tomcat" % port)
+    # not yet, and conditionally -> run_command("echo 'tcp %d ACCEPT' >> /etc/firewall.d/tomcat" % sslPort)
+    
+    # if this is a priviledged port, we need to tell authbind about it
+    run_command("rm -f /etc/authbind/byport/%d" % old[myId][PORT_ATTR])
+    if port < 1024:
+        run_command("touch /etc/authbind/byport/%d && chmod 755 /etc/authbind/byport/%d " % (port,port))
+  
+    if not new["System"]["EnableInitmode"]:
+        return "service tomcat7 restart; service firewall restart"
+
+
+def schema():
+    return """
+        "%s": {
+            "type":"map",
+            "title":"Web configuration",
+            "description":"Web server connectivity configuration",
+            "mapping":
+            {
+                "%s": 
+                {
+                    "type":"int",
+                    "required":true,
+                    "title":"Normal WEB port to use"
+                }, 
+                "%s":
+                {
+                    "type":"bool",
+                    "required":true,
+                    "title":"Require and SSL connection"
+                }, 
+                "%s":
+                {
+                    "type":"int",
+                    "required":true,
+                    "title":"SSL port number to use"
+                }, 
+                "%s":
+                {
+                    "type":"bool",
+                    "required":true,
+                    "title":"Use SSL port"
+                }
+            }
+        }
+""" % (myId, PORT_ATTR, REQUIRE_SSL_ATTR, SSLPORT_ATTR, USESSL_ATTR)
+        
+            
+def cfgKey():
+    return myId
+    
+if __name__ == "__main__":
+    print json.dumps(get())
+
+        
+        
+

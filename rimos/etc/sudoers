@@ -1,0 +1,9 @@
+# effectively /etc/sudoers.d/rimcommon
+
+# Members of the admin group may gain root privileges
+%admin ALL=(ALL) ALL
+
+#
+rimuser  ALL=(root) NOPASSWD: ALL
+admin   ALL=(root) NOPASSWD: /sbin/adminconsole
+rsync   ALL=(root) NOPASSWD: ALL

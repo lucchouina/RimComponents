@@ -1,0 +1,188 @@
+#!/usr/bin/env python
+#
+"""
+    Main shell container command.
+    
+    Responsabilities include:
+    
+    - start or stop the full set of configrues containers.
+    - report on the status of each container
+    
+"""
+
+import os
+import sys
+import time
+from rim import *
+from settings.handlers import containers,ipinfo
+from lxc import *
+
+croot="%s/containers" % Rim().dataDir
+
+if os.getuid() != 0:
+    print "You must be root to run this command"
+    sys.exit( 1 )
+
+syslog=logger("main").log
+
+cfg=containers.get()
+size=int(containers.getSize(cfg))
+ipbase=containers.getIpBase(cfg)
+rim=Rim()
+version=rim.curVersion()
+netmask=ipinfo.getNetmask(ipinfo.get())
+gw=ipinfo.getGw(ipinfo.get())
+ip=ipinfo.getIp(ipinfo.get())
+
+ffile=containers.FLAG_FILE
+# if we are running inside a container, we exit gracefully
+if os.path.isfile(ffile):
+    sys.exit(0)
+    
+def getRange():
+    if len(sys.argv) == 2:
+        return range(0, size)
+    else:
+        l=[]
+        for sint in sys.argv[2:]:
+            try:
+                index=int(sint)
+            except:
+                print "Container indexes must be supplied. 0 based"
+                sys.exit(1)
+            l.append(index)
+        return l
+
+def stopit():
+    #
+    # startup all of the sontainers
+    #
+    for index in getRange():
+        lxc=Lxc('rimnode', index, version, ipbase, netmask)
+        sys.stderr.write("Stopping %s " % lxc.name)
+        if runCmd(syslog, "chroot %s/root /sbin/telinit 0" % lxc.myroot):
+            lfileName="%s/root/__curlevel__" % lxc.myroot
+            while True:
+                try:
+                    level=open(lfileName, "r").read()
+                except:
+                    time.sleep(1)
+                    sys.stderr.write(".")
+                    continue
+                if level[0:1] == "0" :
+                    break
+                time.sleep(1)
+                sys.stderr.write(".")
+        lxc.stop()
+        lxc.remove()
+        lxc.destroy()
+        print "done."
+    #
+    if not runCmd(syslog, "runAction lxcstop"):
+        syslog("lxcstop failed")
+        sys.exit(1)
+
+def cleanit():
+    for index in getRange():
+        lxc=Lxc('rimnode', index, version, ipbase, netmask)
+        runCmd(syslog, "rm -rf %s/%s" %  (rim.dataDir, lxc.name))
+    runCmd(syslog, "rm -rf %s/containers" %  (rim.dataDir))
+
+if len(sys.argv) == 1 or sys.argv[1] == 'status':
+    for index in getRange():
+        lxc=Lxc('rimnode', index, version, ipbase, netmask)
+        print "Container %d status - %d" % (index, lxc.state)
+elif sys.argv[1] == 'start':
+    #
+    # run any commands 
+    #
+    if not runCmd(syslog, "runAction lxcstart"):
+        syslog("Failed to setup bridge interface")
+        sys.exit(1)
+        
+    # setup the bringe
+    #
+    if not runCmd(syslog, "setupBridge %s %s %s" % (ip, netmask, gw)):
+        syslog("Failed to setup bridge interface")
+        sys.exit(1)
+    #
+    # check on the rwcache and make sure we have a clean copy
+    #
+    runCmd(syslog, "mkdir -p %s/rwjail" % croot)
+    lxcrwpath="%s/rwjail.fs" % croot
+    currwpath="%s/%s/rwjail.fs" % (rim.softDir, version)
+    if not os.path.isfile(lxcrwpath):
+        runCmd(syslog, "cp %s %s" % (currwpath, lxcrwpath))
+        child = subprocess.Popen("losetup -f", stdout=subprocess.PIPE, shell=True)
+        device=child.communicate()[0].split()[0]
+        runCmd(syslog, "losetup %s %s" % (device, lxcrwpath))
+        if not runCmd(syslog, "fsck -a -t ext3 %s 2>/dev/null 1>&2" % device):
+            print "Fsck failed for the shared rw cache.Aborting (%d)" % ret
+            sys.exit(1)
+        runCmd(syslog, "losetup -d %s" % (device))
+            
+    #
+    # mount it
+    #
+    mntPoint="%s/rwjail" % croot
+    if not isMountPoint(mntPoint):
+        runCmd(syslog, "mkdir -p %s/rwjail" % croot)
+        ret=doMount(syslog, "-o loop %s" % lxcrwpath, "%s/rwjail" %  croot)
+        if not ret:
+            print "Failed to mount shared rw cache. Aborting"
+            sys.exit(1)
+            
+        #
+        # make sure the IP config in this cache is invalid so as to not to colide with the main one
+        #
+        runCmd(syslog, "mkdir -p %s/rwjail/etc/network" % croot) 
+        runCmd(syslog, "cat /etc/network/interfaces | sed 's/.*address.*/address 1.2.3.4/' > %s/rwjail/etc/network/interfaces && sync" %  croot)
+
+        for count in range(0,5):
+            ret=runCmd(logger, "mount -n -o ro,remount %s/rwjail" % croot)
+            if not ret:
+                syslog("Failed to mount shared rw cache in read-only mode. Retrying...")
+            time.sleep(2)
+            
+        if not ret:
+            syslog("Failed to mount shared rw cache in read-only mode. Aborting...")
+            sys.exit(1)
+
+    #
+    # startup all of the sontainers
+    #
+    for index in getRange():
+        lxc=Lxc('rimnode', index, version, ipbase, netmask)
+        #
+        # Drive the sequence through.
+        # The container object is able to figure out what state it is at
+        # and skip over transitions that have been done already.
+        #
+        sys.stderr.write("Starting %s [build]" % lxc.name)
+        if not lxc.isRunning():
+            lfileName="%s/root/__curlevel__" % lxc.myroot
+            if not lxc.build():
+                sys.stderr.write("[Failed]")
+                continue
+            lxc.create()
+            lxc.start()
+            while True:
+                try:
+                    level=open(lfileName, "r").read()
+                except:
+                    time.sleep(1)
+                    sys.stderr.write(".")
+                    continue
+                if level[0:1] == "5" :
+                    print "done"
+                    break
+                sys.stderr.write(".")
+                time.sleep(2)
+
+elif sys.argv[1] == 'stop':
+    stopit()
+elif sys.argv[1] == 'clean':
+    stopit()
+    cleanit()
+else:
+    print "usage : containers {start|stop|clean} [ indexes ]"

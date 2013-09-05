@@ -1,0 +1,17 @@
+#! /bin/bash
+#
+# Upgrade to a new postgresql version
+#
+# We are running in the context of a firstboot.
+# All RIM variables are available to us and postinstall phase saved the 
+# previous version label into /var/lib/postgresql/91Version
+#
+echo "Upgrading databse from postgresql 9.1 to postgresql 9.2."
+/usr/lib/postgresql/9.2/bin/pg_upgrade \
+    --link \
+    -b $prefix/usr/lib/postgresql/9.1/bin \
+    -B /usr/lib/postgresql/9.2/bin \
+    -d /var/lib/postgresql/9.1/main \
+    -D /var/lib/postgresql/9.2/main \
+    -O "-c config_file=/etc/postgresql/9.2/main/postgresql.conf" \
+    -o "-c config_file=$prefix/etc/postgresql/9.1/main/postgresql.conf"

@@ -1,0 +1,21 @@
+#!/usr/bin/env python
+
+"""
+Check if a recovery need to be performed
+The standing recovery flag will drive this.
+We check every minute to see if the recovery is undergoing.
+A successful recovery will reset the standing recovery flag.
+"""
+import backups
+import sys
+import rim
+
+log=rim.logger("check-recover").log
+backup=backups.Backup();
+backup.readCfg()
+if backup.doRecover(): 
+    if backup.lockit(30):
+        backup.unlockit()
+        cmd="echo /sbin/run-recover | /usr/bin/at -qb now"
+        rim.runCmd(log, cmd)
+sys.exit(0)

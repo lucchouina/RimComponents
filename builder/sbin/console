@@ -1,0 +1,25 @@
+#!/usr/bin/env python
+
+# Start a serial console session to a vm
+#
+# usage: console [vm name]
+#
+from ciConsole import *
+import sys
+import os
+import rim
+
+if len(sys.argv) < 2:
+    print "usage : console [vm name]"
+    sys.exit(1)
+    
+c=Console(sys.argv[1])
+try:
+    c.getTelnet()
+except:
+    print "Vm is either unknown or console was not started"
+    sys.exit(1)
+    
+
+# fireup a telnet to that port
+os.system("telnet 0 %s" % c.telnet)

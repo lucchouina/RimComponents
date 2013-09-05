@@ -1,0 +1,36 @@
+#! /bin/bash
+if [ $# != 1 ]
+then
+    echo "usage : tpmunwrap <executable name>"
+    exit 1
+fi
+if [ -f $1 ]
+then
+    path=$1
+else
+    if [ -f `pwd`/$1 ]
+    then
+        path=`pwd`/$1
+    else
+        path=`which $1`
+        if [[ "$path" = /* ]]
+        then
+           : # we are done
+        else
+           echo "Failed to find executable '$1'"
+           exit 1
+        fi
+    fi
+fi
+dir=`dirname $path`
+file=`basename $path`
+if [ ! -f $dir/wrapped/$file ]
+then
+    echo "file '$dir/$file' not wrapped."
+    exit 1
+else
+    mv -f $dir/wrapped/$file $dir/$file
+    rmdir $dir/wrapped 2>/dev/null
+    echo "$file unwrapped."
+    exit 0
+fi

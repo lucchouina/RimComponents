@@ -1,0 +1,14 @@
+#! /bin/bash
+. /etc/rimbootstrap
+if [ ! "$1"  -a ! "$2" ]
+then
+    echo "usage : rimbuild [BranchSpec] [Product]"
+fi
+branch $1 $2
+rimcheckout || exit 1
+rimake || exit 1
+rimpkg || exit 1
+cd ${RIM_WORKSPACE}/${RIM_BRANCH}/${RIM_PRODUCT} || exit 1
+rimiso || exit 1
+cp *.iso /data/isos/${RIM_PRODUCT}_${RIM_BRANCH}.iso || exit 1
+exit 0

@@ -1,0 +1,18 @@
+#! /bin/bash
+#
+# create a rw cache of size $1 kbytes into file $2
+#
+loopDev=`losetup -f`
+if [ ! "$loopDev" ]
+then
+   echo "Failed to allocate a loop device!"
+   exit 1
+fi
+dir=`dirname $2`
+dd if=/dev/zero bs=1 seek=$(($1*1024)) count=1 of=$2 2>/dev/null 1>&2
+losetup $loopDev $2
+mkfs -t ext3 $loopDev 2>/dev/null 1>&2
+# NOTE - the containers.py mount assumes rwcache is mounted on $dir/rwcache
+mkdir -p $dir/rwcache
+mount -n $loopDev $dir/rwcache || exit 1
+exit 0

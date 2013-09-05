@@ -1,0 +1,16 @@
+#!/usr/bin/env python
+
+"""
+Perform a backup - called from commands line or cron
+"""
+import backups
+
+if os.getuid() != 0:
+    print "You must be root to run this command"
+    sys.exit( 1 )
+    
+backup=backups.Backup();
+if backup.stop():
+    return 0
+else:
+    return 1

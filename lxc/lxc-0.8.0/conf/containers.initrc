@@ -1,0 +1,39 @@
+#!/bin/sh
+#
+### BEGIN INIT INFO
+# Provides:				containers
+# Required-Start:		net
+# Default-Start:		8
+# Short-Description:	Netcontainer final target - suppresses default netcontroller final target
+# Description:			This final target will fire up the linux containers as specified by initmode config
+### END INIT INFO
+#
+
+# Get lsb functions
+. /lib/lsb/init-functions
+
+case "$1" in
+  start)
+    log_begin_msg "Starting containers...."
+    containers start
+    log_end_msg $?
+    ;;
+
+  stop)
+    log_begin_msg "Stopping containers..."
+    containers stop
+    log_end_msg $?
+    ;;
+
+  restart)
+    $0 stop
+    $0 start
+    ;;
+
+  *)
+    echo "Usage: /etc/init.d/containers {start|stop|restart}"
+    exit 1
+
+esac
+
+exit 0

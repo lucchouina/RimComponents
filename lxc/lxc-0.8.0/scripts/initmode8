@@ -1,0 +1,17 @@
+#! /bin/bash
+#
+# Private copy of the initmode which will make the initmode
+# webserver available in all levels 
+#
+### BEGIN INIT INFO
+# Provides:          webserver
+# Required-Start:    net
+# Required-Stop:
+# Default-Start:     8
+# Default-Stop:      0 1 6
+# Short-Description: initmode web service
+# Description:       This service will start webServer on port 80
+### END INIT INFO
+
+DAEMON_ARGS="81"
+. /etc/init.d/initmode

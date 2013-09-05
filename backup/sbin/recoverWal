@@ -1,0 +1,29 @@
+#!/usr/bin/env python
+
+"""
+Recover the WAl files.
+Tied to backups.py recover() function.
+Right now we tell postgresql to call 'recoverWall %p' which translates to 
+
+"""
+import backups
+import sys
+import os
+import glob
+import subprocess
+import rim
+
+log=rim.logger("recoverWall").log
+
+#
+# We now compress the archive files during the archiving phase.
+# We need to uncompress them now.
+# Partial WAL files go from 16M to 28K in size when compressed...
+# 
+log("[pwd] is %s, Checking in %s" % (os.getcwd(), sys.argv[1]))
+for infile in sorted(glob.glob('pg_xlog/*.gz')):
+    ok, ret = rim.runCmd(log, "gunzip -f %s" % infile)
+    if not ok:
+        sys.exit(1)
+
+sys.exit(0)

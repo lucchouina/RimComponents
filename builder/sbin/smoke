@@ -1,0 +1,376 @@
+#!/usr/bin/env python
+
+""" 
+Run a smoketest
+
+We are passed in :
+    - the IP of the XenServer
+    - the name of the server vm
+    - the name of the clientContainer vm
+    - the IP of the server vm
+    - the IP of the clientContainer vm
+    - the number of controllers to use
+
+"""
+
+def usage():
+    sys.stderr.write("""
+    usage: %s \\
+          -x [xenServerIp] \\
+          -g [serverName|serverMac] \\
+          -c [clientName|clientMac] \\
+          -i [IP of server ] \\
+          -I [IP of client ]
+          -b [server build branch] \\
+          -B [client build branch]
+    """ % sys.argv[0])
+    sys.exit(1)
+
+import XenAPI
+from ciConsole import *
+from rimAPI import *
+import serverAPI
+import sys
+import time
+import getopt
+from settings.handlers import imgd,ipinfo
+import rim
+
+log=rim.logger("serverSmoke", debug=True).log
+
+try:
+    optlist, args = getopt.getopt(sys.argv[1:], 'x:g:c:i:I:B:b:C')
+except:
+    usage()
+
+xenserver=""
+serverId=""
+clientId=""
+serverIp=""
+clientIp=""
+serverBranch=""
+clientBranch=""
+showConsole=False
+
+if len(optlist):
+    for opt, arg in optlist:
+        if opt == '-x':
+            xenserver=arg
+            continue
+        if opt == '-g':
+            serverId=arg
+            continue
+        if opt == '-c':
+            clientId=arg
+            continue
+        if opt == '-i':
+            serverIp=arg
+            continue
+        if opt == '-I':
+            clientIp=arg
+            continue
+        if opt == '-b':
+            serverBranch=arg
+            continue
+        if opt == '-B':
+            clientBranch=arg
+            continue
+        if opt == '-C':
+            showConsole=True
+            continue
+else:
+    usage()
+    
+if  not showConsole and (
+    not len(xenserver) or not len(serverId)  or \
+    not len(clientId) or not len(serverIp) or \
+    not len(clientIp) or not len(serverBranch) or \
+    not len(clientBranch)
+    ):
+    usage()
+
+url="https://%s:443/" % xenserver
+session = XenAPI.Session(url)
+session.xenapi.login_with_password("root", "imhere4u")
+#
+# wait for the next vdi event on a certain ref
+#
+def waitForEject(ref):
+    fmt = "%20s  %5s  %s %s"
+    session.xenapi.event.register(["VDI"])
+    while True:
+        try:
+            for event in session.xenapi.event.next():
+                print fmt % (event['class'], event['operation'], event['ref'], ref)    
+                if event['ref'] == ref: return
+        except XenAPI.Failure, e:
+            if e.details == [ "EVENTS_LOST" ]:
+                print "Caught EVENTS_LOST; should reregister"
+
+def findVm(vId, name):
+    vms=session.xenapi.VM.get_by_name_label(vId)
+    if not len(vms):
+        # check if the ID is a 
+        log("%s vm '%s' not found!" % (name, vId))
+        sys.exit(1)
+    if len(vms) > 1:
+        # check if the ID is a 
+        log("Too many %s vms '%s' found!" % (name, vId))
+        sys.exit(1)
+    return vms[0]
+    
+
+def vm(ref):
+    return session.xenapi.VM.get_record(ref)
+
+def vmName(ref):
+    return vm(ref)['name_label']
+    
+def vmIsOff(ref):
+    return vm(ref)['power_state'] =='Halted'
+    
+log("Starting run with parameters:")
+log("    xenserver      =   '%s'" % xenserver)
+log("    serverId       =   '%s'" % serverId)
+log("    clientId        =   '%s'" % clientId)
+log("    serverIp       =   '%s'" % serverIp)
+log("    clientIp        =   '%s'" % clientIp)
+log("    serverBranch   =   '%s'" % serverBranch)
+log("    clientBranch    =   '%s'" % clientBranch)
+gVm=findVm(serverId, "server")
+cVm=findVm(clientId, "client")
+
+if showConsole:
+    for vmRef in [ gVm, cVm ]:
+        if not vmRef:
+            print "Vm not found"
+            continue
+        vmo=vm(vmRef)
+        consoleRefs=vmo['consoles']
+        print "%s: " % vmo['name_label']
+        for ref in consoleRefs:
+            console=session.xenapi.console.get_record(ref)
+            print console
+    sys.exit(0)
+
+def getPrimaryEthMac(vmRef):
+    refs=vm(vmRef)['VIFs']
+    for ref in refs:
+        vif=session.xenapi.VIF.get_record(ref)
+        if vif['device'] == '0':
+            return vif['MAC']
+    log("Could not find eth0 on vm '%s'" % vmName(vmRef))
+    sys.exit(1)
+        
+
+# Make sure the associated eth0 macs are known by imgd
+gMac=getPrimaryEthMac(gVm)
+cMac=getPrimaryEthMac(cVm)
+
+def getOrCreateHostByMac(cfg, mac, name):
+    for host in cfg['hosts']:
+        if host['Mac'].upper() == mac.upper():
+            return host
+    host=imgd.newHost()
+    host['Mac']=mac
+    host['Name']=name
+    cfg['hosts'].append(host)
+    return host
+    
+# got the MACs check imgd
+cfg=imgd.get()
+gHost=getOrCreateHostByMac(cfg, gMac, serverId)
+cHost=getOrCreateHostByMac(cfg, cMac, clientId)
+#
+# these are VMs so, no image service , just dhcp
+gHost["Serve"]=False
+cHost["Serve"]=False
+imgd.saveCfg(cfg)
+
+#
+# Map the DVD drive 1 of each to there ISOs
+
+# find the SR or create it
+ipCfg=ipinfo.get()
+# gether our ip info
+ip=ipinfo.getIp(ipCfg)
+gw=ipinfo.getGw(ipCfg)
+mask=ipinfo.getNetmask(ipCfg)
+
+clientCdName="clientContainer_%s.iso" % clientBranch
+serverCdName="server_%s.iso" % serverBranch
+
+ourLocation="%s:%s" % (ip, imgd.isoDir)
+foundSr=False
+serverVdi=None
+clientVdi=None
+srs=session.xenapi.SR.get_all_records()
+for srRef in srs:
+    sr=session.xenapi.SR.get_record(srRef)
+    if sr['type']=='iso':
+        smcfg=sr['sm_config']
+        if smcfg.has_key('iso_type') and smcfg['iso_type'] == 'nfs_iso':
+            for pbdRef in sr['PBDs']:
+                pbd=session.xenapi.PBD.get_record(pbdRef)
+                location=pbd['device_config']['location']
+                if location == ourLocation:
+                    sr=session.xenapi.SR.get_record(pbd['SR'])
+                    for vdiRef in sr['VDIs']:
+                        vdi=session.xenapi.VDI.get_record(vdiRef)
+                        if vdi['location']==clientCdName:
+                            clientVdi=vdiRef
+                        elif vdi['location']==serverCdName:
+                            serverVdi=vdiRef
+                    foundSr=True
+                    break
+
+# we may need to create it
+if not foundSr:
+    log("Storage resource not found for this build host '%s'" % ourLocation)
+    sys.exit(1)
+
+# check that we found iso for both vms
+if not serverVdi:
+    log("server iso '%s' not found in nfs iso storage '%s'" % (serverCdName, ourLocation))
+    sys.exit(1)
+if not clientVdi:
+    log("client iso '%s' not found in nfs iso storage '%s'" % (clientCdName, ourLocation))
+    sys.exit(1)
+
+def findCd(vdiRef, vmRef):
+    vm=session.xenapi.VM.get_record(vmRef)
+    print vdiRef
+    for vbdRef in vm['VBDs']:
+        print session.xenapi.VBD.get_record(vbdRef)
+
+def findBootableDvd(vmRef):
+    vm=session.xenapi.VM.get_record(vmRef)
+    for vbdRef in vm['VBDs']:
+        vbd=session.xenapi.VBD.get_record(vbdRef)
+        if vbd['type'] == 'CD' :
+            if vbd['bootable']:
+                return vbdRef
+    return None
+
+def vdiName(ref):
+    return session.xenapi.VDI.get_record(ref)['name_label']
+
+def insertCd(vdiRef, vmRef):
+    dvdRef=findBootableDvd(vmRef)
+    if not dvdRef:
+        log("No bootable DVD found for VM '%s'" % vmName(vmRef))
+        sys.exit(1)
+    while True:
+        try:
+            log("Inserting '%s' in %s's dvd." % (vdiName(vdiRef), vmName(vmRef)))
+            session.xenapi.VBD.insert(dvdRef, vdiRef)
+            break
+        except XenAPI.Failure as e:
+            if e.details[0]=='VBD_NOT_EMPTY':
+                print "An iso was found , ejecting ..."
+                session.xenapi.VBD.eject(dvdRef)
+            else:
+                log("Got errors '%s' during insertion" % e)
+                sys.exit(1)
+    return dvdRef
+
+def ejectCd(vmRef):
+    dvdRef=findBootableDvd(vmRef)
+    try:
+        session.xenapi.VBD.eject(dvdRef)
+    except:
+        pass
+    
+# make sure these VMs are powered down
+if not vmIsOff(gVm) : 
+    log("Shutting down server VM")
+    session.xenapi.VM.hard_shutdown(gVm)
+if not vmIsOff(cVm) : 
+    log("Shutting down client VM")
+    session.xenapi.VM.hard_shutdown(cVm)
+
+# now wait until we have http access to these IPs
+def waitForInitmode(api):
+    count=150
+    while count:
+        root=api.getCfg()
+        if root: 
+            log("RimAPI in online for ip '%s'" % api.ip)
+            return root
+        time.sleep(2)
+        count=count-1
+    log("Failed to conect to RimAPI")
+    sys.exit(1)
+    
+############ Start the consoles for both VMs #############
+# If they are already running - these will exit gracefully
+Console(serverId).start()
+Console(clientId).start()
+
+############ server ############
+# insert the CDs
+gVbdRef=insertCd(serverVdi, gVm)
+# power up
+log("Firing up server VM")
+session.xenapi.VM.start(gVm, False, True)
+log("Waiting for CD eject...")
+waitForEject(serverVdi)
+log("Ejectting CD...")
+ejectCd(gVm)
+log("Waiting for server initmode...")
+sApi=RimAPI(log, serverIp, 80)
+gRoot=waitForInitmode(sApi)
+
+
+########### client ###############
+# insert the CDs
+cVbdRef=insertCd(clientVdi, cVm)
+# power up
+log("Firing up client VM")
+session.xenapi.VM.start(cVm, False, True)
+log("Waiting for CD eject...")
+#waitForEject(clientVdi)
+#log("Ejectting CD...")
+#ejectCd(cVm)
+log("Waiting for client initmode...")
+cApi=RimAPI(log, clientIp, 80)
+cRoot=waitForInitmode(cApi)
+
+# move dhcp to static for both
+sApi.set("IPInfo:SubnetMask", mask)
+sApi.set("IPInfo:IPAddress", serverIp)
+sApi.set("IPInfo:Gateway", gw)
+cApi.set("IPInfo:SubnetMask", mask)
+cApi.set("IPInfo:IPAddress", clientIp)
+cApi.set("IPInfo:Gateway", gw)
+
+# transition them into app mode
+sApi.set("System:EnableInitmode", False)
+cApi.set("System:EnableInitmode", False)
+cApi.sync()
+sApi.sync()
+
+# Wait at least one minute for both to transition
+log("Transition to appmode and waiting a minute...")
+time.sleep(60)
+
+# access the client cfg port , which has now be transitioned to 81
+cApi=RimAPI(log, clientIp, 81)
+waitForInitmode(cApi)
+
+# enable CPD
+log("Enabling CPD on client vm and waiting 1 minute...")
+cApi.set("cpd:Enabled", True)
+cApi.sync()
+
+# Wait for cpd to cycle through
+time.sleep(60)
+
+#
+# Now add the client to the server
+#
+#
+# wait max 5 minute for the clients perform their work loads for the smoke
+#
+# all good
+sys.exit(0)

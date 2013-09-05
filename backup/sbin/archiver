@@ -1,0 +1,97 @@
+#!/usr/bin/env python
+
+"""
+Perform a backup - called from commands line or cron
+"""
+import backups
+import sys
+import os
+import subprocess
+import rim
+
+log=rim.logger("archiver").log
+
+archiveDir="/data/archives"
+triggered=False
+
+backup=backups.Backup();
+if backup.isEnabled():
+    log(os.getcwd())
+    walPath=sys.argv[1]
+    walFile=sys.argv[2]
+    log("archiver called with args: %s, %s" % (walPath, walFile))
+    cmd="mkdir -p %s" % (archiveDir)
+    ok, code = rim.runCmd(log, cmd)
+    if not ok:
+        sys.exit(0)
+    #
+    # We need to limit the number of wal files we keep around when the 
+    # backup server is unreachable.
+    # 
+    if len(os.listdir(archiveDir)) > 60:
+        triggered=True
+        log("Triggered is set.")
+    else:
+        cmd="cat %s | gzip > %s/%s.gz" % (walPath, archiveDir, walFile)
+        ok, code = rim.runCmd(log, cmd)
+        if not ok:
+            sys.exit(0)
+    #
+    # we only get busy between backups
+    #
+    if backup.lockit():
+        hostname=backup.getHost()
+        username=backup.getName()
+        if backup.transport.setup():
+            #
+            # make sure the pg_xlog exists
+            #
+            tStamp=backup.getLatestTstamp()
+            if tStamp:
+                cmd=backup.transport.mkCmd("mkdir -p Latest_%s/pivot/data/postgresql/9.2/main/pg_xlog" % tStamp)
+                rim.runCmd(log, cmd)
+                #
+                # the start() of backup creates (or clean) immediately an archives link
+                # that point to the the last or current rsync backup (which run 
+                # hourly for now). 
+                #
+                # This archives is a symbolic to, for example, _Backup_2012_09_05-03:20.24/data/archives
+                # so we simply try to unload our archives to that remote directory
+                #
+                for fileName in sorted(os.listdir(archiveDir)):
+                    path="%s/%s" % (archiveDir, fileName)
+                    ok = backup.transport.sendFile(path, "Latest_%s/pivot/data/postgresql/9.2/main/pg_xlog/%s" % (tStamp, fileName))
+                    if not ok:
+                        backup.unlockit()
+                        log("'%s' failed with exit code %d" % (cmd, retCode))
+                        backup.logErr("Continuous archiving is failing")
+                        sys.exit(0)
+                    else:
+                        if backup.getStatus() == "error":
+                            backup.logErr("Continuous archiving back online", "good")
+                    os.unlink(path)
+                #
+                # The backup server is back online, check if it was gone for more then 60 archiver runs
+                # which would mean we have a hole in the archiving stream and need to create a backup now.
+                # NOTE: since we are running within postgresql context already, we use at(1) with a 
+                #       sleep to eliminate any potential of deadlock or failure.
+                #
+                if triggered:
+                    log("Firing up a backup due to trigger.")
+                    atfile='/tmp/runbackups'
+                    open(atfile, "w").write("sleep 1 && sudo /sbin/run-backups 2>>/var/log/backups.log 1>&2\n")
+                    cmd=("/usr/bin/at -qb now < %s > /dev/null 2>&1" % atfile);
+                    retCode=subprocess.call(cmd, shell=True)
+                    if retCode != 0:
+                        backup.unlockit()
+                        log("'%s' failed with exit code %d" % (cmd, retCode))
+                        sys.exit(0)
+
+            backup.transport.setdown()
+        else:
+             backup.logErr("Transport error - continuous archiving is offline")
+        backup.unlockit()
+    else:
+        log("Failed to lock backup process.")
+
+sys.exit(0)

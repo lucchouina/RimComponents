@@ -1,0 +1,98 @@
+#!/usr/bin/env python
+#
+
+""" /sbin/imgd
+
+    Image server core.
+    
+    Tasks:
+    
+    - read configuration when it changed
+      this means using the imon facility.
+      
+    - listen to dhcp requests from hosts we know about
+      and start the cylce when the server flag for that
+      host if set
+      
+    - fork a thread for each tftp transfers
+    
+    - for each iso loopback mount the image and export it
+      Any tftp file query from the nodes is made relative to 
+      that iso mount
+      
+    - life cycle for rim will be stateless after the initial dhcp/tftp
+      sequence as the target hosts will nfs mount and proceed with a
+      normal rim scratch install
+      
+    - life cycle of kickstart install will have to handle http queries
+      as they come in (this could be done by the tftp thread for that host)
+             
+"""
+import time
+import os
+from settings.command import *
+from settings.utils import *
+from settings.handlers import imgd
+from img.dhcpd import *
+from img.tftpd import *
+from selector import *
+import rim
+import simplejson as json
+
+
+debug=False
+for arg in sys.argv[1:]:
+    if arg == '-d':
+        debug=True
+#
+# deamonize outselves
+#
+if not debug:
+    try:
+        pid = os.fork()
+    except OSError, e:
+        raise Exception, "%s [%d]" % (e.strerror, e.errno)
+
+    if (pid == 0):  
+        os.setsid()
+        try:
+            pid = os.fork()
+        except OSError, e:
+            raise Exception, "%s [%d]" % (e.strerror, e.errno)
+        if (pid != 0):
+            os._exit(0)
+    else:
+        os._exit(0)
+
+    # record pid for proper initrc management
+    open("/var/run/imgd.pid", "w").write(str(os.getpgid(os.getpid())))
+
+log=rim.logger("imgd").log
+
+# start a monitoring handler
+monitor=rim.fileMon(log, imgd.CONFILE)
+# make sure XenServer can access the isos from this NFS SR
+rim.runCmd(log, "exportfs -o ro,no_subtree_check \*:%s" % imgd.isoDir)
+# external loop around configuration changed
+while True:
+    # prime everything based on current config
+    log("Reading configuration")
+    cfg=imgd.get()
+    table=rim.jsonToObject(cfg)
+    hosts={}
+    for host in table.hosts:
+        hosts[host.Mac.upper()]=host
+       
+    # start a tftp service
+    tftp=tftpServer(hosts, imgd, cfg)
+    # start a dhcp service
+    dhcp=dhcpServer(hosts, tftp)
+    select=selector()
+    select.addHandler(tftp)
+    select.addHandler(dhcp)
+    select.addHandler(monitor)
+    select.waitLoop()
+    time.sleep(2)
+
+os.system("exportfs -ua")
+sys.exit(0)

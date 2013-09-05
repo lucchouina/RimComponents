@@ -1,0 +1,25 @@
+#! /bin/bash
+#
+# Setup networking for purpose of containers.
+#
+# 1: ip address
+# 2: netmask
+# 3: gw
+#
+if ! ifconfig br0 > /dev/null
+then
+    sysctl -w net.ipv4.ip_forward=1 1>/dev/null 2>&1 || exit 1
+    #
+    # then , setup the bridge interface
+    #
+    brctl addbr br0 || exit 1
+    brctl stp br0 off || exit 1
+    brctl addif br0 eth0 || exit 1
+    ifconfig eth0 0.0.0.0 || exit 1
+    ifconfig br0 $1 netmask $2 || exit 1
+    #
+    # reroute the default gw (if any) to the bridge
+    #
+    [ "$3" ] && route add default gw $3 || exit 1
+fi
+exit 0

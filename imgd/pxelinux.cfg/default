@@ -1,0 +1,15 @@
+default vesamenu.c32
+prompt 1
+timeout 600
+
+label linux
+  menu label Install system
+  kernel kernel
+  append initrd=initrd nfsinstall
+label rescue
+  menu label ^Rescue system
+  kernel kernel
+  append initrd=initrd nopivot
+label local
+  menu label Boot from ^local drive
+  localboot 0xffff

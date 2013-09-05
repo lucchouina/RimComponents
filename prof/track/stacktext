@@ -1,0 +1,96 @@
+#!/usr/bin/perl
+
+# Reworked 5/26/11 mnp
+
+my $PROG = 'stacktext';
+
+sub abort {
+    my $msg = shift;
+    die "$PROG: $msg\n";
+}
+
+sub usage {
+    die "Usage: $PROG <reportFile> <binary> <coreFile>\n";
+}
+
+sub normaddr {
+    sprintf "0x%08x", hex shift;
+}
+
+my $reportFile = shift || usage();
+my $binary = shift || usage();
+my $coreFile = shift || usage();
+
+-r $binary || abort("Cannot read $binary.");
+-x $binary || abort("$binary is not executable.");
+my $gdb = `which gdb`; chomp($gdb);
+-x $gdb || abort("Cannot execute $gdb.");
+
+my $gdbCmdFile = './.gdbcmds';
+my $gdbLogFile = './.gdblog';
+my $hexre      = qr/0x[a-f0-9]+/;
+
+
+#  1. gather all addresses of interest from report file.
+
+my %addresses;
+open(RFH, $reportFile) || abort("Failed to open $reportFile.");
+while(<RFH>) {
+    /^\s*(0x\w+) \[\d+\]/ and $addresses{$1} = ' ';
+}
+close(RFH);
+
+
+#  2. write a gdb command file asking about those addresses
+
+open(GDBFH, ">$gdbCmdFile") || abort("Failed to open $gdbCmdFile.");
+print GDBFH "set verbose off\n";
+print GDBFH "set logging file $gdbLogFile\n";
+print GDBFH "set logging on\n";
+for my $addr (sort keys %addresses) {
+        print GDBFH "li *$addr\n";
+        print GDBFH "x $addr\n";
+}
+close(GDBFH);
+system("$gdb $binary $coreFile < $gdbCmdFile >/dev/null 2>&1") == 0
+	or abort("problem running GDB");
+
+
+#  3. retrieve gdb's results
+
+open(GDBLOG, $gdbLogFile) || abort("Failed to open $gdbLogFile.");
+while (<GDBLOG>) {
+    chomp;
+
+    # 0x6c1f0 is in Manager (manager.cpp:102).
+    # 0x81548 is in LgDbApi::ConnectDb() (LgDbApi.cpp:164).
+    if (/($hexre) is in (.*)\.$/i) {
+	my $a = normaddr($1);
+	$addresses{$a} .= $2 if length $addresses{$a} <= 1;
+    }
+
+    # (gdb) 0x31ac4 <BeaconManager+8>:        0x4000e96b
+    elsif (/($hexre) (<.*)$/) {
+	my $a = normaddr($1);
+	$addresses{$a} .= $2 if length $addresses{$a} <= 1;
+    }
+}
+close GDBLOG;
+
+
+#  4. second pass on report file, appending results if known
+
+open(RFH, $reportFile) || abort("Failed to open $reportFile.");
+while(<RFH>) {
+    if (/$hexre/) {
+	my $a = normaddr($&);
+	s/$/ $addresses{$a} ||= "NO DATA" /e;
+    }
+    print;
+}
+close RFH;
+
+unlink $gdbLogFile;
+unlink $gdbCmdFile;
+
+

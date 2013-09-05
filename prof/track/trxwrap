@@ -1,0 +1,56 @@
+#! /bin/bash
+if [ $# != 1 ]
+then
+    echo "usage : tpmwrap <executable name>"
+    exit 1
+fi
+if [ -f $1 ]
+then
+    path=$1
+else
+    if [ -f `pwd`/$1 ]
+    then
+        path=`pwd`/$1
+    else
+        path=`which $1`
+        if [[ "$path" = /* ]]
+        then
+           : # we are done
+        else
+           echo "Failed to find executable '$1'"
+           exit 1
+        fi
+    fi
+fi
+dir=`dirname $path`
+file=`basename $path`
+if [ ! -f $dir/wrapped/$file ]
+then
+    if [ -x $dir/$file ]
+    then
+        mkdir $dir/wrapped  2>/dev/null
+        if mv $dir/$file $dir/wrapped/$file 2>/dev/null
+        then                        
+            cat << 'EOT' > $dir/$file                                              
+            dir=`dirname $0`
+            file=`basename $0`                                          
+            export LD_PRELOAD_32=tpmdbg.so  
+            exec $dir/wrapped/$file
+            export -n LD_PRELOAD_32
+            echo "Failed to run original application ' $dir/wrapped/$file  '."                                                   
+EOT
+            chmod 755 $dir/$file                                                   
+            echo "$dir/$file was wrapped. Original is now '$dir/wrapped/$file'"    
+            exit 0    
+        else
+            echo "Could not create backup file '$dir/wrapped/$file'."
+            exit 1
+        fi                                                             
+     else
+         echo "$file" is not executable. Wrap aborted.
+         exit 1
+     fi
+else
+    echo "$dir/$file is already wrapped. Use tpunwrap first."
+    exit 0
+fi

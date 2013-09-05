@@ -1,0 +1,57 @@
+#!/usr/bin/env python
+
+"""
+Perform a backup
+"""
+import backups
+import sys
+import subprocess
+import os
+from rim import *
+
+backup=backups.Backup();
+log=logger("run-backups").log
+
+if (len(sys.argv) > 1): pw=sys.argv[1]
+else: pw=""
+
+exitCode=1
+
+# if this is cron calling us, exit emmediately if continuous backups are turned off.
+if pw != "cron" or backup.isEnabled():
+    # IF A RECOVERY IS BEING ASKED FOR - DO NOT BACKUP ANYTHING!
+    if not backup.doRecover():
+        # ok - try it
+        if not backup.lockit(30):
+            log("Lock is busy with pid %d" % backup.pid)
+        else:
+            unlocked=False
+            msg=backup.validate(pw)
+            if len(msg):
+                backup.logErr(msg)
+            else:
+                cmd="/sbin/runhook prebackup %s" % backup.transport.mntpt
+                ok, retCode=runCmd(log, cmd)
+                if not ok:
+                    err="Pre-backup failed with error %d" % (retCode)
+                    log(err)
+                    backup.logErr(err)
+                else:
+                    if backup.start():
+                        backup.unlockit()
+                        unlocked=True
+                        cmd="/sbin/runhook postbackup %s" % backup.transport.mntpt
+                        ok, retCode=runCmd(log, cmd)
+                        if not ok:
+                            err="Post-backups failed with error %d" % (retCode)
+                            log(err)
+                            backup.logErr(err)
+                        else:
+                            exitCode=0
+                            # backups.recover will have reset the recovery flag
+                            # and backup.doRecover() will return false.
+            if not unlocked: 
+                backup.unlockit()
+    else:
+        log("note - run-backup - recovery request is active - aborting.")
+sys.exit(exitCode)

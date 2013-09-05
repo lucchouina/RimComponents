@@ -1,0 +1,117 @@
+######################################
+# Path manipulation functions
+######################################
+
+function pathremove () 
+{
+        local IFS=':'
+        local NEWPATH
+        local DIR
+        local PATHVARIABLE=${2:-PATH}
+        for DIR in ${!PATHVARIABLE} ; do
+                if [ "$DIR" != "$1" ] ; then
+                  NEWPATH=${NEWPATH:+$NEWPATH:}$DIR
+                fi
+        done
+        export $PATHVARIABLE="$NEWPATH"
+}
+
+function pathprepend () 
+{
+        pathremove $1 $2
+        local PATHVARIABLE=${2:-PATH}
+        export $PATHVARIABLE="$1${!PATHVARIABLE:+:${!PATHVARIABLE}}"
+}
+
+function pathappend () 
+{
+        pathremove $1 $2
+        local PATHVARIABLE=${2:-PATH}
+        export $PATHVARIABLE="${!PATHVARIABLE:+${!PATHVARIABLE}:}$1"
+}
+
+#######################################
+# Rim env setup 
+#######################################
+pathappend /bin
+pathappend /sbin
+pathappend /usr/bin
+pathappend /usr/sbin
+pathappend /usr/local/bin
+pathappend ~/bin
+export EDITOR=nedit
+unset LANG
+
+#
+# Rim bootstrap starts
+####################################################
+RIM_WORKSPACE=$HOME/scs
+export SVNUSER="--username lchouinard"
+export SVNPASSWORD="--password capatera"
+function branch()
+{
+    [ "$RIM_WORKSPACE" ] || RIM_WORKSPACE=$HOME/scs
+    export RIM_WORKSPACE
+    [ "$2" ] && export RIM_PRODUCT=$2
+    [ "$1" ] && export RIM_BRANCH=$1
+    [ -d $RIM_WORKSPACE ] || mkdir -p $RIM_WORKSPACE
+    if [ ! -d $RIM_WORKSPACE/branches ]
+    then
+
+        svn co $SVNUSER $SVNPASSWORD  -q http://192.168.0.213/svn/rim/branches $RIM_WORKSPACE/branches 2>/dev/null || \
+        svn co $SVNUSER $SVNPASSWORD -q https://s2sys.com:444/svn/rim/branches $RIM_WORKSPACE/branches 2>/dev/null
+    fi
+    if [ ! -d $RIM_WORKSPACE ]
+    then
+        echo "Failed to access rim boostrap files!"
+    else
+        svn update $SVNUSER $SVNPASSWORD -q $RIM_WORKSPACE/branches
+        pathprepend $RIM_WORKSPACE/branches
+        if [ ! "$1" ]
+        then
+            if [ "$RIM_PRODUCT" ]
+            then
+                echo "Product : $RIM_PRODUCT"; 
+                rimbranch -l -v $RIM_BRANCH
+            else
+                $RIM_WORKSPACE/branches/bootbranch
+            fi
+        else
+            export RIM_VERSION=`bootbranch ${RIM_BRANCH}`
+            export ENVFILE=$RIM_WORKSPACE/rim_${RIM_VERSION}/scripts/rimstart
+            pathprepend $RIM_WORKSPACE/rim_${RIM_VERSION}/tools/bin/`uname -m`
+            pathprepend $RIM_WORKSPACE/rim_${RIM_VERSION}/tools/bin
+            pathprepend $RIM_WORKSPACE/rim_${RIM_VERSION}/scripts
+            if $ENVFILE > /tmp/$$
+            then
+                . /tmp/$$
+            else
+                cat /tmp/$$
+            fi
+            rm /tmp/$$
+            export RIM_VERSION=`bootbranch ${RIM_BRANCH}`
+            if [ "$RIM_VERSION" ]
+            then
+                if [ ! -d $RIM_WORKSPACE/rim_${RIM_VERSION} ]
+                then
+                    svn co --depth=empty $SVNUSER $SVNPASSWORD -q http://192.168.0.213/svn/branches/rim_${RIM_VERSION} $RIM_WORKSPACE/rim_${RIM_VERSION} 2>/dev/null || \
+                    svn co --depth=empty $SVNUSER $SVNPASSWORD -q https://s2sys.com:444/svn/branches/rim_${RIM_VERSION} $RIM_WORKSPACE/rim_${RIM_VERSION} 2>/dev/null
+                fi
+                if [ -d $RIM_WORKSPACE/rim_${RIM_VERSION} ]
+                then
+                    for subdir in scripts tools sconstruct
+                    do
+                        ( svn upgrade $RIM_WORKSPACE/rim_${RIM_VERSION}/$subdir
+                        svn update --set-depth=infinity $RIM_WORKSPACE/rim_${RIM_VERSION}/$subdir ) 1>/dev/null 2>&1
+                    done
+                    pathprepend $RIM_WORKSPACE/rim_${RIM_VERSION}/tools/bin/`uname -m`
+                    pathprepend $RIM_WORKSPACE/rim_${RIM_VERSION}/tools/bin
+                    pathprepend $RIM_WORKSPACE/rim_${RIM_VERSION}/scripts
+                else
+                    echo "Failed to create rim directory '$RIM_WORKSPACE/rim_${RIM_VERSION}'"
+                fi
+            fi
+        fi
+    fi
+}
+

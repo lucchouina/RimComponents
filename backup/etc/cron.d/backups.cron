@@ -1,0 +1,2 @@
+0 * * * * root PATH=/bin:/sbin:/usr/bin:/usr/sbin /sbin/run-backups cron 2>>/var/log/backups.log 1>&2
+* * * * * root PATH=/bin:/sbin:/usr/bin:/usr/sbin /sbin/check-recover 2>>/var/log/backups.log 1>&2

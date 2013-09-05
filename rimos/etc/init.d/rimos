@@ -1,0 +1,22 @@
+#
+#
+#  Main S2 sysv init.d script.
+#  First to run on startup and last to run on shutdown.
+#  As defined in ../../rim/rim.spec in svn repository.
+#
+
+### BEGIN INIT INFO
+# Provides:          rimos
+# Short-Description: Start rimos software
+# Required-Start:    all
+# Required-Stop:
+# Should-Start:      
+# Should-Stop:       
+# Default-Start:     5
+# Default-Stop:      0 1 3 6
+### END INIT INFO
+
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
+
+exit 0
+

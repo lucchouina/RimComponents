@@ -1,0 +1,95 @@
+#!/usr/bin/env python
+#
+
+""" ci.py
+
+JSON for reading/updating CI configuration
+
+"""
+import os
+import json
+import subprocess
+
+from settings.command import *
+from settings.utils import *
+
+myId="ci"
+CONFILE="/etc/ci.conf"
+defaultConfig="""
+{
+    "xIP" : "10.176.0.2",
+    "xenLogin" : "root",
+    "xenPassword" : "imhere4u",
+    "consoleDir" : "/data/consoles",
+    "telnetBase" : "12000"
+}
+"""
+def saveCfg(cfg):
+    open(CONFILE, "w").write("%s" % json.dumps(cfg, sort_keys=True, indent=4))
+    
+def get():
+    # read config
+    if os.path.exists(CONFILE):
+        cfg=json.loads(open(CONFILE,"r").read())
+    else:
+        cfg=json.loads(defaultConfig)
+        saveCfg(cfg)
+    return cfg
+
+# set            
+def set(old, new):
+    saveCfg(new[myId])
+    return ""
+
+def schema():
+    return """
+        "%s": {
+            "type":"map",
+            "order":"1",
+            "title":"CI configuration",
+            "description":"Continuous integration configuration",
+            "mapping":
+            {
+                "xIP": 
+                {
+                    "type":"str",
+                    "order": 1,
+                    "subtype":"ip",
+                    "appmode":true,
+                    "title":"Xen Server IP"
+                },
+                "xenLogin": 
+                {
+                    "type":"str",
+                    "order": 2,
+                    "appmode":true,
+                    "title":"Xen Server login id"
+                },
+                "xenPassword": 
+                {
+                    "type":"str",
+                    "order": 3,
+                    "subtype":"password",
+                    "appmode":true,
+                    "title":"Xen Server password"
+                },
+                "consoleDir": 
+                {
+                    "type":"str",
+                    "order": 4,
+                    "appmode":true,
+                    "title":"Console(s) output directory"
+                },
+                "telnetBase": 
+                {
+                    "type":"int",
+                    "order": 5,
+                   "appmode":true,
+                    "title":"Base port number for console telnet(s)"
+                }
+            }
+        }
+""" % (myId)
+
+def cfgKey(): 
+    return myId           

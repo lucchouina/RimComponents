@@ -1,0 +1,75 @@
+#!/usr/bin/env python
+#
+
+"""
+
+Utility to run a command inside all containers
+
+"""
+import os
+import sys
+
+from settings.handlers import containers
+
+# read in the script from stdin
+fileName="/tmp/runall.script.%d" % os.getpid()
+scriptFile=open(fileName, "w");
+s=sys.stdin.read()
+while len(s):
+    scriptFile.write(s)
+    s=sys.stdin.read()
+scriptFile.close()
+os.system("chmod 755 %s" % fileName)
+
+# check if container is reaceable over ip
+def online(ip):
+    ret=os.system('ping -q -c 2 -t 3 %s 1>/dev/null 2>&1' % ip)
+    return ret == 0
+    
+# Compute address base 
+cfg=containers.get()
+ipBase=containers.getIpBase(cfg)
+numContainers=containers.getSize(cfg)
+ipbytes=[ int(part) for part in ipBase.split(".") ]
+
+# check if the rsa keys have been created
+home=os.getenv("HOME")
+keyFile="%s/.ssh/id_rsa" % home
+try:
+    open(keyFile, "r")
+except:
+    if os.system("ssh-keygen -P '' -f %s" % keyFile) != 0:
+        print "Failed to create key file !"
+        sys.exit(1)
+    
+
+# loop to all defined containers
+# 
+for index in range(0, numContainers):
+
+    thisIp="%d.%d.%d.%d" % (ipbytes[0], ipbytes[1], ipbytes[2], ipbytes[3]+index)
+    sys.stderr.write("[ %s ]\n" % thisIp)
+    if online(thisIp):
+        # for now we use 'rimnode' as the name prefix...
+        # copy the public key part to the destination
+        dstDir="/data/containers/rimnode%d/root/%s" % (index, home)
+        cmd="mkdir -p %s/.ssh && cp %s.pub %s/.ssh/authorized_keys" % (dstDir, keyFile, dstDir)
+        ret=os.system(cmd)
+        if ret != 0:
+            sys.stderr.write("Failed to copy public key part to %s - error %d" % (dstDir, ret))
+            sys.exit(1)
+        
+        # copy script over
+        ret=os.system("cp %s %s/script" % (fileName, dstDir))
+        if ret != 0:
+            sys.stderr.write("Failed to copy script file %s - error %d" % (dstDir, ret))
+            sys.exit(1)
+            
+        # run it
+        os.system("ssh -o StrictHostKeyChecking=no %s ./script" % thisIp)
+        if ret != 0:
+            sys.stderr.write("Script failed on rimnode%d - error %d" % (index, ret))
+            sys.exit(1)
+    else:
+        sys.stderr.write("Not online.")
+        
